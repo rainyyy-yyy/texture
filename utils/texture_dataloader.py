@@ -85,7 +85,7 @@ class SeparatedFolderDataLoader:
 
 
 def get_dataloader(dataset_name, batch_size, data_root, train_num_workers, val_num_workers, test_num_workers, transforms):
-    if dataset_name == "SeparatedFolder":
+    if dataset_name == "texture":
         train_dataset = TextureDataset(os.path.join(data_root, "train"), transforms=transforms)
         val_dataset = TextureDataset(os.path.join(data_root, "val"), transforms=transforms)
         test_dataset = TextureDataset(os.path.join(data_root, "test"), transforms=transforms)

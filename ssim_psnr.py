@@ -3,112 +3,93 @@ import glob
 import torch
 import numpy as np
 import cv2
-from skimage.metrics import peak_signal_noise_ratio as psnr
-from skimage.metrics import structural_similarity as ssim
+from skimage.metrics import structural_similarity as ssim, peak_signal_noise_ratio as psnr
 from models.models_v3 import UNetGenerator
 import argparse
-import csv
 
 # -----------------------
-# 參數
+# 參數設定
 # -----------------------
-parser = argparse.ArgumentParser()
-parser.add_argument('--weights_dir', type=str, default='D:/Users/peggy/Github/output/Pix2Pix_2025_10_28_0_55/Dataset_0')
-parser.add_argument('--test_dirs', type=str, nargs='+', 
-                    default=['D:/Users/peggy/Dataset/ddsp/Dataset_0/test'])
-parser.add_argument('--output_csv', type=str, default='metrics_results.csv')
+parser = argparse.ArgumentParser(description="Texture 模型效能評估 (取 Acc / Prec / Rec 前三名)")
+parser.add_argument('--weights_dir', type=str, default='D:/Users/peggy/Github/output/Texture_2025_12_21_16_57',
+                    help='pth 所在資料夾')
+parser.add_argument('--test_dirs', type=str, nargs='+',
+                    default=['D:/Users/peggy/Dataset/texture/texture/test'],
+                    help='測試資料夾 (含 input/target 子資料夾)')
+parser.add_argument('--threshold', type=int, default=128, help='二值化閾值')
+parser.add_argument('--img_size', type=int, default=512)
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"使用設備: {device}")
 
 # -----------------------
-# 讀取權重
-# -----------------------
-weights_files = sorted([f for f in glob.glob(os.path.join(args.weights_dir, "*.pth")) if os.path.isfile(f)])
-if not weights_files:
-    print("找不到任何權重檔案")
-    exit(0)
-print(f"找到 {len(weights_files)} 個權重檔案")
-
-# -----------------------
-# 參數設定
-# -----------------------
-img_size = 256
-
-# -----------------------
-# 函數定義
+# 工具函式
 # -----------------------
 def imread_unicode(path):
     arr = np.fromfile(path, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError(f"讀取圖像失敗: {path}")
+    if img.ndim == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return img
 
-def load_2input_1target(path):
+def load_image(path):
     img = imread_unicode(path)
-    img = cv2.resize(img, (img_size * 3, img_size), interpolation=cv2.INTER_CUBIC)
-    img_np = img.astype(np.float32)
-
-    w = img_np.shape[1]
-    part_w = w // 3
-    input_A = img_np[:, :part_w]
-    input_B = img_np[:, part_w:part_w*2]
-    target_C = img_np[:, part_w*2:]
-
-    input_A = torch.from_numpy(input_A / 65535.0 * 2 - 1).unsqueeze(0)
-    input_B = torch.from_numpy(input_B / 65535.0 * 2 - 1).unsqueeze(0)
-    input_tensor = torch.cat([input_A, input_B], dim=0).unsqueeze(0).to(device)
-
-    target_tensor = torch.from_numpy(target_C / 65535.0 * 2 - 1).unsqueeze(0).unsqueeze(0).to(device)
-
-    return input_tensor, target_tensor
-
-def generate_image(generator, input_tensor):
-    with torch.no_grad():
-        return generator(input_tensor)
+    img = cv2.resize(img, (args.img_size, args.img_size))
+    img = img.astype(np.float32) / 255.0 * 2 - 1
+    tensor = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).to(device)
+    return tensor
 
 def denormalize(tensor):
-    return (tensor * 0.5 + 0.5).clamp(0,1)
+    return (tensor * 0.5 + 0.5).clamp(0, 1)
 
-def compute_confusion_metrics(target_np, pred_np, threshold=128):
-    """
-    將目標與生成圖二值化後計算 Accuracy, Precision, Recall
-    target_np, pred_np: 0~255 uint8
-    """
-    target_bin = (target_np >= threshold).astype(np.uint8)
-    pred_bin = (pred_np >= threshold).astype(np.uint8)
+def calc_metrics(gt, pred, threshold=128):
+    gt_bin = (gt >= threshold).astype(np.uint8)
+    pred_bin = (pred >= threshold).astype(np.uint8)
+    TP = np.sum((gt_bin == 1) & (pred_bin == 1))
+    TN = np.sum((gt_bin == 0) & (pred_bin == 0))
+    FP = np.sum((gt_bin == 0) & (pred_bin == 1))
+    FN = np.sum((gt_bin == 1) & (pred_bin == 0))
+    accuracy = (TP + TN) / (TP + TN + FP + FN + 1e-8)
+    precision = TP / (TP + FP + 1e-8)
+    recall = TP / (TP + FN + 1e-8)
+    return accuracy, precision, recall
 
-    TP = np.sum((pred_bin==1) & (target_bin==1))
-    TN = np.sum((pred_bin==0) & (target_bin==0))
-    FP = np.sum((pred_bin==1) & (target_bin==0))
-    FN = np.sum((pred_bin==0) & (target_bin==1))
+# -----------------------
+# 權重
+# -----------------------
+weights_files = sorted(glob.glob(os.path.join(args.weights_dir, "*.pth")))
+if not weights_files:
+    print("找不到任何權重檔案")
+    exit(0)
+print(f"找到 {len(weights_files)} 個權重檔案")
 
-    acc = (TP + TN) / max(TP + TN + FP + FN, 1)
-    prec = TP / max(TP + FP, 1)
-    rec = TP / max(TP + FN, 1)
-
-    return acc, prec, rec
+num_weights = len(weights_files)
+num_tests = len(args.test_dirs)
+if num_weights > num_tests:
+    print(f"權重數量 ({num_weights}) > 測試資料夾數量 ({num_tests})，將循環使用 test_dirs。")
+test_dirs_expanded = [args.test_dirs[i % num_tests] for i in range(num_weights)]
 
 # -----------------------
 # 主程式
 # -----------------------
-model_results = []
+results = []
 
-if len(weights_files) != len(args.test_dirs):
-    print("！權重數量與 test 資料夾數量不一致，將以最短數量為準")
+for weight_path, test_dir in zip(weights_files, test_dirs_expanded):
+    model_name = os.path.splitext(os.path.basename(weight_path))[0]
+    print(f"\n=== 評估模型 {model_name} ===")
+    print(f"測試資料夾: {test_dir}")
 
-for weight_path, test_dir in zip(weights_files, args.test_dirs):
-    if not os.path.exists(test_dir):
-        print(f"！測試資料夾不存在: {test_dir}, 跳過")
+    input_root = os.path.join(test_dir, "input")
+    target_root = os.path.join(test_dir, "target")
+    if not os.path.isdir(input_root) or not os.path.isdir(target_root):
+        print("缺少 input 或 target 資料夾，跳過")
         continue
 
-    model_name = os.path.splitext(os.path.basename(weight_path))[0]
-    print(f"\n評估模型 {model_name}，測試資料夾: {test_dir}")
-
     # 載入模型
-    generator = UNetGenerator(in_channels=2, out_channels=1).to(device)
+    generator = UNetGenerator(in_channels=1, out_channels=1).to(device)
     ckpt = torch.load(weight_path, map_location=device, weights_only=False)
     if 'generator' in ckpt:
         generator.load_state_dict(ckpt['generator'])
@@ -118,68 +99,88 @@ for weight_path, test_dir in zip(weights_files, args.test_dirs):
         generator.load_state_dict(ckpt)
     generator.eval()
 
-    # 遞迴抓取 PNG
-    test_files = sorted(glob.glob(os.path.join(test_dir, "**", "*.png"), recursive=True))
-    if not test_files:
-        print(f"！沒有找到 PNG 測試圖像，跳過此資料夾")
+    # 收集 input
+    input_files = []
+    for root, _, files in os.walk(input_root):
+        for f in files:
+            if f.lower().endswith('.png'):
+                input_files.append(os.path.join(root, f))
+    input_files.sort()
+    if not input_files:
+        print("找不到任何輸入圖片，跳過")
         continue
 
-    psnr_list, ssim_list = [], []
-    acc_list, prec_list, rec_list = [], [], []
+    ssim_list, psnr_list, acc_list, prec_list, rec_list = [], [], [], [], []
 
-    for path in test_files:
+    for input_path in input_files:
+        fname = os.path.basename(input_path)
+        suffix = fname.split("input_")[-1]
+        rel_folder = os.path.relpath(os.path.dirname(input_path), input_root)
+        target_path = os.path.join(target_root, rel_folder, f"target_{suffix}")
+
+        if not os.path.exists(target_path):
+            print(f"找不到對應 target：{target_path}")
+            continue
+
         try:
-            input_tensor, target_tensor = load_2input_1target(path)
-            fake_tensor = generate_image(generator, input_tensor)
+            input_tensor = load_image(input_path)
+            target_tensor = load_image(target_path)
+            with torch.no_grad():
+                fake_tensor = generator(input_tensor)
 
-            fake_np = denormalize(fake_tensor).squeeze().cpu().numpy()
-            target_np = denormalize(target_tensor).squeeze().cpu().numpy()
+            target_np = (denormalize(target_tensor).cpu().numpy()[0, 0] * 255).astype(np.uint8)
+            fake_np = (denormalize(fake_tensor).cpu().numpy()[0, 0] * 255).astype(np.uint8)
 
-            psnr_val = psnr(target_np, fake_np, data_range=1.0)
-            ssim_val = ssim(target_np, fake_np, data_range=1.0)
-            acc, prec, rec = compute_confusion_metrics((target_np*255).astype(np.uint8),
-                                                       (fake_np*255).astype(np.uint8))
+            ssim_val = ssim(target_np, fake_np, data_range=255)
+            psnr_val = psnr(target_np, fake_np, data_range=255)
+            acc, prec, rec = calc_metrics(target_np, fake_np, threshold=args.threshold)
 
-            psnr_list.append(psnr_val)
             ssim_list.append(ssim_val)
+            psnr_list.append(psnr_val)
             acc_list.append(acc)
             prec_list.append(prec)
             rec_list.append(rec)
 
         except Exception as e:
-            print(f"！無法處理 {path}: {e}")
-            continue
+            print(f"無法處理 {fname}: {e}")
 
-    if psnr_list:
-        avg_psnr = sum(psnr_list)/len(psnr_list)
-        avg_ssim = sum(ssim_list)/len(ssim_list)
-        avg_acc = sum(acc_list)/len(acc_list)
-        avg_prec = sum(prec_list)/len(prec_list)
-        avg_rec = sum(rec_list)/len(rec_list)
+    if ssim_list:
+        mean_ssim = np.mean(ssim_list)
+        mean_psnr = np.mean(psnr_list)
+        mean_acc = np.mean(acc_list)
+        mean_prec = np.mean(prec_list)
+        mean_rec = np.mean(rec_list)
 
-        print(f"平均 PSNR: {avg_psnr:.4f}, SSIM: {avg_ssim:.4f}, Accuracy: {avg_acc:.4f}, Precision: {avg_prec:.4f}, Recall: {avg_rec:.4f}")
+        print(f"\n模型 {model_name} 平均指標：")
+        print(f"SSIM={mean_ssim:.4f} | PSNR={mean_psnr:.2f} | Acc={mean_acc:.4f} | Prec={mean_prec:.4f} | Rec={mean_rec:.4f}")
 
-        model_results.append({
-            'model': model_name,
-            'weight_path': weight_path,
-            'psnr': avg_psnr,
-            'ssim': avg_ssim,
-            'accuracy': avg_acc,
-            'precision': avg_prec,
-            'recall': avg_rec
+        results.append({
+            "model": model_name,
+            "acc": mean_acc,
+            "prec": mean_prec,
+            "rec": mean_rec
         })
     else:
-        print(f"！模型 {model_name} 沒有成功評估的圖片。")
+        print(f"模型 {model_name} 無成功處理的圖片。")
 
 # -----------------------
-# 輸出 CSV
+# 統計前三名
 # -----------------------
-if model_results:
-    with open(args.output_csv, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=['model','weight_path','psnr','ssim','accuracy','precision','recall'])
-        writer.writeheader()
-        for r in model_results:
-            writer.writerow(r)
-    print(f"\n已儲存結果至 CSV: {args.output_csv}")
+if results:
+    top_acc = sorted(results, key=lambda x: x["acc"], reverse=True)[:3]
+    top_prec = sorted(results, key=lambda x: x["prec"], reverse=True)[:3]
+    top_rec = sorted(results, key=lambda x: x["rec"], reverse=True)[:3]
+
+    print("\nTop 3 Accuracy Models:")
+    for r in top_acc:
+        print(f" - {r['model']}: Accuracy={r['acc']:.4f}")
+
+    print("\nTop 3 Precision Models:")
+    for r in top_prec:
+        print(f" - {r['model']}: Precision={r['prec']:.4f}")
+
+    print("\nTop 3 Recall Models:")
+    for r in top_rec:
+        print(f" - {r['model']}: Recall={r['rec']:.4f}")
 else:
-    print("！沒有可評估的模型")
+    print("\n沒有任何有效結果。")

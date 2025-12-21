@@ -28,14 +28,9 @@ FAKE_LABEL = 0
 L1_LOSS_LAMUDA = 150
 USING_DROPOUT_DURING_EVAL = False
 
-# k-fold
-K_FOLD = 5
-RAW_DATA_ROOT = "D:/Users/peggy/Dataset/texture" # "../DSP_MP"
-K_SEED = 42
-
 # data
-DATASET_ROOT = "D:/Users/peggy/Dataset/texture" # "../DSP"
-DATASET = "DSP"
+DATASET_ROOT = "D:/Users/peggy/Dataset/texture/texture" # "../DSP"
+DATASET = "texture"
 
 # output
 CONSTANT_FEATURE_DIS_LEN = 4

@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument('--data', type=str, default=Settings.DATASET_ROOT)
     parser.add_argument('--resume', type=str, default=None, help='checkpoint 路徑，若要 resume 請指定')
     parser.add_argument('--adv_use', type=int, default=0, help='是否使用對抗損失')
-    parser.add_argument('--ssim_use', type=int, default=1, help='是否使用SSIM損失')
+    parser.add_argument('--ssim_use', type=int, default=0, help='是否使用SSIM損失')
     parser.add_argument('--l1_use', type=int, default=1, help='是否使用L1損失')
     parser.add_argument('--g_lr', type=float, default=Settings.G_LR)
     parser.add_argument('--d_lr', type=float, default=Settings.D_LR)
@@ -143,39 +143,16 @@ def validate(dataloader, generator, l1_loss, device, out_dir, best_ssim):
     avg_ssim = total_ssim / total_samples
     avg_mae = total_mae / total_samples
     avg_psnr = total_psnr / total_samples  # 計算平均 PSNR
-    print(f"Validation SSIM: {avg_ssim:.4f}, MAE: {avg_mae:.4f}, PSNR: {avg_psnr:.4f}")
+    print(f"Validation SSIM: {avg_ssim:.4f}, PSNR: {avg_psnr:.4f}")
     
-    # 若整體 SSIM 優於歷史最佳 → 儲存該 batch 圖片與模型
+    # 若整體 SSIM 優於歷史最佳 → 儲存該 batch 模型
     if avg_ssim > best_ssim and best_batch_images is not None:
         input_image, target_image, fake_image = best_batch_images
 
-        print(f"目前最佳 SSIM: {avg_ssim:.4f}，儲存個別圖片與模型中...")
-
-        save_dir = os.path.join(out_dir, f"best_ssim_{avg_ssim:.4f}")
-        input_dir = os.path.join(save_dir, "input")
-        target_dir = os.path.join(save_dir, "target")
-        fake_dir = os.path.join(save_dir, "fake")
-
-        # 建立子資料夾
-        os.makedirs(input_dir, exist_ok=True)
-        os.makedirs(target_dir, exist_ok=True)
-        os.makedirs(fake_dir, exist_ok=True)
-
-        # 反正規化
-        input_image = denormalize(input_image)
-        target_image = denormalize(target_image)
-        fake_image = denormalize(fake_image)
-
-        # 逐張儲存到對應資料夾
-        for idx in range(input_image.size(0)):
-            save_image(input_image[idx], os.path.join(input_dir, f"sample_{idx:03d}.png"))
-            save_image(target_image[idx], os.path.join(target_dir, f"sample_{idx:03d}.png"))
-            save_image(fake_image[idx], os.path.join(fake_dir, f"sample_{idx:03d}.png"))
-
-        print(f"已儲存 {input_image.size(0)} 組最佳 SSIM 圖片至：{save_dir}")
+        print(f"目前最佳 SSIM: {avg_ssim:.4f}，儲存模型中...")
 
         # 儲存模型
-        model_path = os.path.join(save_dir, "best_model.pth")
+        model_path = os.path.join(out_dir, "best_model.pth")
         torch.save(generator.state_dict(), model_path)
         print(f"已儲存最佳模型: {model_path}")
 
@@ -186,12 +163,12 @@ def validate(dataloader, generator, l1_loss, device, out_dir, best_ssim):
 # ============================
 # 5. Main Training Loop
 # ============================
-def main(fold_root, fold):
+def main(out_root):
     import random
     # TODO: 自訂超參數:
     start_epoch = 0
     epoch_times = []
-    patience = 50  # 早停容忍次數，可自行調整
+    patience = 30  # 早停容忍次數，可自行調整
     no_improve_count = 0
     best_objective = float('inf')  # 新增這行
     best_model_path = None
@@ -214,7 +191,7 @@ def main(fold_root, fold):
     l1_use =3 / total * args.l1_use
 
     # 建立資料夾
-    out_dir = fold_root
+    out_dir = out_root
     os.makedirs(out_dir, exist_ok=True)
 
     # 設定隨機種子，resume 時也要恢復
@@ -235,7 +212,7 @@ def main(fold_root, fold):
     dataloaders = get_dataloader(
         dataset_name="texture",
         batch_size=batch_size,
-        data_root=os.path.join(data_root, f"Dataset_{fold}"),
+        data_root=data_root,
         train_num_workers=4,
         transforms=transform,
         val_num_workers=2,
@@ -377,11 +354,9 @@ def main(fold_root, fold):
 
 if __name__ == "__main__":
     # TODO: --device 可能需要改成 0
-    K_FOLD = 5
-    # split_dataset_cv(Settings.RAW_DATA_ROOT, Settings.DATASET_ROOT, n_folds=Settings.K_FOLD, seed=Settings.K_SEED)
     # 建立資料夾
     output_file = time.strftime(
-            "{}_{}_{}_{}_{}_{}".format("Pix2Pix",
+            "{}_{}_{}_{}_{}_{}".format("Texture",
                                         time.localtime().tm_year,
                                         time.localtime().tm_mon,
                                         time.localtime().tm_mday,
@@ -391,8 +366,5 @@ if __name__ == "__main__":
     )
     out_dir = os.path.join(Settings.OUTPUT_ROOT, output_file)
     os.makedirs(out_dir, exist_ok=True)
-    for fold in range(K_FOLD):
-        print(f"\n===== Fold {fold+1}/{Settings.K_FOLD} Training Start =====\n")
-        # 每個 fold 對應的 dataset root
-        fold_root = os.path.join(out_dir, f"Dataset_{fold}")
-        main(fold_root, fold) 
+    print("=== Start training ===")
+    main(out_dir) 

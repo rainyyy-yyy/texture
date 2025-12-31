@@ -17,7 +17,7 @@ parser.add_argument('--weights_dir', type=str, default='D:/Users/peggy/Github/ou
 parser.add_argument('--test_dirs', type=str, nargs='+',
                     default=['D:/Users/peggy/Dataset/texture/texture/test'],
                     help='test 資料夾 (含 input/target 子資料夾)')
-parser.add_argument('--output_dir', type=str, default='D:/Users/peggy/Dataset/texture/output/7',
+parser.add_argument('--output_dir', type=str, default='D:/Users/peggy/Dataset/texture/output/9',
                     help='儲存生成圖片的資料夾')
 parser.add_argument('--threshold', type=int, default=128, help='二值化閾值')
 parser.add_argument('--img_size', type=int, default=512)
@@ -48,10 +48,6 @@ def morphology_fill(
     max_isolated_dist=100,     # 孤立距離判斷
     debug=False
 ):
-    """
-    對「白底黑瑕疵」影像進行形態學補全：
-    - 可以去除孤立小瑕疵
-    """
     if img.ndim == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -59,33 +55,33 @@ def morphology_fill(
     img_inv = 255 - img
     _, binary = cv2.threshold(img_inv, threshold, 255, cv2.THRESH_BINARY)
 
-    # 開運算初步去雜點
+    # 開運算初步平滑
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     opened = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
     # 連通區域分析
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(opened, connectivity=8)
-    h, w = img.shape[:2]
     cleaned = np.zeros_like(opened)
-
-    # step1: 移除小於 min_area_px 的瑕疵
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if min_area_px is not None and area < min_area_px:
-            continue
-        cleaned[labels == i] = 255
-
-    # step2: 移除孤立瑕疵 (面積小於 max_isolated_area 且與其他瑕疵距離大於 max_isolated_dist)
     centroids_list = [tuple(centroids[i]) for i in range(1, num_labels)]
+
     for i in range(1, num_labels):
         area = stats[i, cv2.CC_STAT_AREA]
-        if area >= max_isolated_area:
-            continue
         c = centroids[i]
-        # 計算與其他瑕疵中心距離
-        min_dist = min([np.linalg.norm(np.array(c)-np.array(other_c)) for j, other_c in enumerate(centroids_list) if j != i-1], default=0)
-        if min_dist > max_isolated_dist:
-            cleaned[labels == i] = 0
+        other_centroids = [tuple(centroids[j]) for j in range(1, num_labels) if j != i]
+        min_dist = min([np.linalg.norm(np.array(c)-np.array(oc)) for oc in other_centroids], default=0)
+
+        # 判斷順序
+        if min_area_px is not None and area < min_area_px:
+            if min_dist <= max_isolated_dist:
+                cleaned[labels == i] = 255  # 保留
+            # else 刪掉 (預設為 0)
+        elif area < max_isolated_area:
+            if min_dist <= max_isolated_dist:
+                cleaned[labels == i] = 255  # 保留
+            # else 刪掉 (預設為 0)
+        else:
+            # area >= max_isolated_area → 保留
+            cleaned[labels == i] = 255
 
     # 閉運算補洞
     closed = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
@@ -227,7 +223,7 @@ for idx, (weight_path, test_dir) in enumerate(zip(weights_files, test_dirs_expan
                                             fake_np_raw, 
                                             kernel_size=5, 
                                             threshold=128, 
-                                            min_area_px=50,          # 直接去掉超小瑕疵
+                                            min_area_px=50,          # 去掉超小瑕疵
                                             max_isolated_area=300,   # 小於此面積才考慮孤立刪除
                                             max_isolated_dist=70,   # 孤立判斷距離
                                             debug=False

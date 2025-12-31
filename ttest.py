@@ -17,7 +17,7 @@ parser.add_argument('--weights_dir', type=str, default='D:/Users/peggy/Github/ou
 parser.add_argument('--test_dirs', type=str, nargs='+',
                     default=['D:/Users/peggy/Dataset/texture/texture/test'],
                     help='test 資料夾 (含 input/target 子資料夾)')
-parser.add_argument('--output_dir', type=str, default='D:/Users/peggy/Dataset/texture/output/7',
+parser.add_argument('--output_dir', type=str, default='D:/Users/peggy/Dataset/texture/output/13',
                     help='儲存生成圖片的資料夾')
 parser.add_argument('--threshold', type=int, default=128, help='二值化閾值')
 parser.add_argument('--img_size', type=int, default=512)
@@ -40,76 +40,165 @@ def safe_psnr(img1, img2, data_range=255.0):
 # 形態學補全函式 (白底黑瑕疵 + 可調整去雜點大小)
 # -----------------------
 def morphology_fill(
-    img, 
-    kernel_size=5, 
-    threshold=128, 
-    min_area_px=None,          # 小於此像素數的瑕疵直接去掉
-    max_isolated_area=300,     # 小於此面積才考慮孤立刪除
-    max_isolated_dist=100,     # 孤立距離判斷
-    debug=False
+    img,
+    kernel_size=5,
+    threshold=128,
+    min_area_px=50,
+    max_isolated_area=300,
+    max_isolated_dist=100,
+    debug=False,
+    debug_dir=None,
+    prefix="debug"
 ):
     """
-    對「白底黑瑕疵」影像進行形態學補全：
-    - 可以去除孤立小瑕疵
+    白底黑瑕疵 → 黑底白瑕疵
+    以最大瑕疵團邊緣為中心，逐步吸收距離小於 max_isolated_dist 的瑕疵團。
+    - 紅點代表被刪除的瑕疵團，標示距離與面積。
+    - 綠點代表保留的瑕疵團。
     """
+
+    import os
+    import numpy as np
+    import cv2
+
     if img.ndim == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 白底黑瑕疵 → 黑底白瑕疵
+    # === Step 1. 白底黑瑕疵 → 黑底白瑕疵 ===
     img_inv = 255 - img
     _, binary = cv2.threshold(img_inv, threshold, 255, cv2.THRESH_BINARY)
 
-    # 開運算初步去雜點
+    # === Step 2. 開運算去雜點 ===
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     opened = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
 
-    # 連通區域分析
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(opened, connectivity=8)
+    if num_labels <= 1:
+        return img  # 沒有瑕疵直接回傳原圖
+
     h, w = img.shape[:2]
     cleaned = np.zeros_like(opened)
 
-    # step1: 移除小於 min_area_px 的瑕疵
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if min_area_px is not None and area < min_area_px:
-            continue
-        cleaned[labels == i] = 255
+    # === Step 3. 找出最大瑕疵團 ===
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    max_idx = np.argmax(areas) + 1
+    main_mask = np.uint8(labels == max_idx) * 255
 
-    # step2: 移除孤立瑕疵 (面積小於 max_isolated_area 且與其他瑕疵距離大於 max_isolated_dist)
-    centroids_list = [tuple(centroids[i]) for i in range(1, num_labels)]
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area >= max_isolated_area:
-            continue
-        c = centroids[i]
-        # 計算與其他瑕疵中心距離
-        min_dist = min([np.linalg.norm(np.array(c)-np.array(other_c)) for j, other_c in enumerate(centroids_list) if j != i-1], default=0)
-        if min_dist > max_isolated_dist:
-            cleaned[labels == i] = 0
+    grouped_indices = {max_idx}
+    changed = True
 
-    # 閉運算補洞
+    # === Step 4. 以邊緣距離吸收相鄰瑕疵 ===
+    while changed:
+        changed = False
+        contours_main, _ = cv2.findContours(main_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours_main:
+            break
+        contour_main = max(contours_main, key=cv2.contourArea)
+
+        for i in range(1, num_labels):
+            if i in grouped_indices:
+                continue
+            mask_i = np.uint8(labels == i) * 255
+            contours_i, _ = cv2.findContours(mask_i, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours_i:
+                continue
+            contour_i = max(contours_i, key=cv2.contourArea)
+
+            # 計算最短邊緣距離（已修正格式錯誤）
+            dist = np.inf
+            for p in contour_i:
+                x, y = p.ravel()
+                d = cv2.pointPolygonTest(contour_main, (float(x), float(y)), True)
+                dist = min(dist, abs(d))
+
+            # 若在距離內 → 吸收進大團
+            if dist <= max_isolated_dist:
+                grouped_indices.add(i)
+                main_mask = cv2.bitwise_or(main_mask, mask_i)
+                changed = True
+
+    # === Step 5. 依面積與距離條件保留 / 刪除 ===
+    keep_flags = []
+    contours_main, _ = cv2.findContours(main_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours_main:
+        contour_main = max(contours_main, key=cv2.contourArea)
+    else:
+        contour_main = []
+
+    for i in range(1, num_labels):
+        mask_i = np.uint8(labels == i) * 255
+        area = stats[i, cv2.CC_STAT_AREA]
+        c = np.array(centroids[i])
+
+        if i in grouped_indices:
+            keep = True
+            dist = 0
+        else:
+            # 計算邊緣距離（安全版）
+            dist = np.inf
+            contours_i, _ = cv2.findContours(mask_i, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours_i and len(contours_main) > 0:
+                contour_i = max(contours_i, key=cv2.contourArea)
+                for p in contour_i:
+                    x, y = p.ravel()
+                    d = cv2.pointPolygonTest(contour_main, (float(x), float(y)), True)
+                    dist = min(dist, abs(d))
+
+            # 面積與距離判斷
+            if area < min_area_px and dist > max_isolated_dist:
+                keep = False
+            elif area < min_area_px and dist <= max_isolated_dist:
+                keep = True
+            elif area < max_isolated_area and dist > max_isolated_dist:
+                keep = False
+            elif area < max_isolated_area and dist <= max_isolated_dist:
+                keep = True
+            else:
+                keep = True
+
+        if keep:
+            cleaned[labels == i] = 255
+        keep_flags.append((tuple(c), area, dist, keep))
+
+    # === Step 6. 補洞 + 平滑 + 反相 ===
     closed = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
-
-    # 嘗試連接虛線
-    kernel_link = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size+4, kernel_size+1))
+    kernel_link = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size + 4, kernel_size + 1))
     dilated = cv2.dilate(closed, kernel_link, iterations=1)
     linked = cv2.erode(dilated, kernel_link, iterations=1)
-
-    # 平滑化 + 反相回白底黑瑕疵
     result = cv2.medianBlur(linked, 3)
     result_final = 255 - result
 
-    if debug:
-        cv2.imshow("binary", binary)
-        cv2.imshow("opened", opened)
-        cv2.imshow("cleaned", cleaned)
-        cv2.imshow("closed", closed)
-        cv2.imshow("linked", linked)
-        cv2.imshow("result_final", result_final)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    # === Step 7. Debug 輸出 ===
+    if debug and debug_dir:
+        os.makedirs(debug_dir, exist_ok=True)
+        # 1️⃣ 紅綠點圖（紅：刪除，綠：保留）
+        vis1 = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        for c, area, dist, keep in keep_flags:
+            color = (0, 255, 0) if keep else (0, 0, 255)
+            cv2.circle(vis1, (int(c[0]), int(c[1])), 3, color, -1)
+            # 列紅點資訊（距離與面積）
+            if not keep:
+                cv2.putText(vis1, f"{int(dist)}px {int(area)}px",
+                            (int(c[0]) + 5, int(c[1]) - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+        cv2.imwrite(os.path.join(debug_dir, f"{prefix}_red_green.png"), vis1)
+
+        # 2️⃣ 清理後（仍有紅綠點）
+        vis2 = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        for c, area, dist, keep in keep_flags:
+            color = (0, 255, 0) if keep else (0, 0, 255)
+            cv2.circle(vis2, (int(c[0]), int(c[1])), 3, color, -1)
+            if not keep:
+                cv2.putText(vis2, f"{int(dist)}px {int(area)}px",
+                            (int(c[0]) + 5, int(c[1]) - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+        cv2.imwrite(os.path.join(debug_dir, f"{prefix}_cleaned_marked.png"), vis2)
+
+        # 3️⃣ 最終結果圖（無標記）
+        cv2.imwrite(os.path.join(debug_dir, f"{prefix}_final.png"), result_final)
 
     return result_final
+
 
 # -----------------------
 # 工具函式
@@ -223,16 +312,18 @@ for idx, (weight_path, test_dir) in enumerate(zip(weights_files, test_dirs_expan
             fake_np_raw = (denormalize(fake_tensor).cpu().numpy()[0,0] * 255).astype(np.uint8)
 
             # --- 形態學補全 ---
+            prefix_name = os.path.splitext(fname)[0]
             fake_np_fill = morphology_fill(
-                                            fake_np_raw, 
-                                            kernel_size=5, 
-                                            threshold=128, 
-                                            min_area_px=50,          # 直接去掉超小瑕疵
-                                            max_isolated_area=300,   # 小於此面積才考慮孤立刪除
-                                            max_isolated_dist=70,   # 孤立判斷距離
-                                            debug=False
-                                        )
-
+                fake_np_raw,
+                kernel_size=5,
+                threshold=128,
+                min_area_px=49,
+                max_isolated_area=300,
+                max_isolated_dist=250,
+                debug=True,
+                debug_dir="D:/Users/peggy/Dataset/texture/output/13/debug",
+                prefix=prefix_name
+            )
 
             # --- 評估 ---
             ssim_val = ssim(target_np, fake_np_fill, data_range=255)

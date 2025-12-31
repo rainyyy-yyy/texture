@@ -29,7 +29,7 @@ L1_LOSS_LAMUDA = 150
 USING_DROPOUT_DURING_EVAL = False
 
 # data
-DATASET_ROOT = "D:/Users/peggy/Dataset/texture/texture" # "../DSP"
+DATASET_ROOT = "D:/Users/peggy/Dataset/texture/texture"
 DATASET = "texture"
 
 # output

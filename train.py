@@ -13,10 +13,9 @@ from models.pytorch_msssim import ms_ssim
 from torchvision.utils import make_grid
 from torchvision.utils import save_image
 from utils.texture_dataloader import get_dataloader
-# from data_processing.k_fold import split_dataset_cv
 from skimage.metrics import structural_similarity as ssim
 
-    # python 常用工具/train_pix2pix_3_TWCC實驗.py --data breast_cancer(SUB_6000)/Dataset_0 --adv_use 1 --ssim_use 0 --l1_use 0 --type SUB
+# python 常用工具/train_pix2pix_3_TWCC實驗.py --data breast_cancer(SUB_6000)/Dataset_0 --adv_use 1 --ssim_use 0 --l1_use 0 --type SUB
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--batch', type=int, default=Settings.BATCH_SIZE)

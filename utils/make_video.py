@@ -5,18 +5,20 @@ import numpy as np
 from texture.models.models_v3 import UNetGenerator
 import argparse
 
+# 指令：python -m texture.utils.make_video
+
 # -----------------------
 # 參數設定
 # -----------------------
 parser = argparse.ArgumentParser(description="從影片生成 Pix2Pix Fake 對比影片 (含形態學補全)")
-parser.add_argument('--video_path', type=str, default='D:/Users/peggy/Dataset/texture/whatabighole.mp4', help='輸入影片路徑')
+parser.add_argument('--video_path', type=str, default='D:/Users/peggy/Dataset/texture/test.mp4', help='輸入影片路徑')
 parser.add_argument('--weights_path', type=str, default='D:/Users/peggy/Github/output/checkpoint_epoch_70.pth', help='模型權重路徑')
 parser.add_argument('--output_dir', type=str, default='D:/Users/peggy/Dataset/texture/video_output', help='輸出資料夾')
 parser.add_argument('--frame_interval', type=int, default=10, help='取樣幀距（每多少幀取一次）')
 parser.add_argument('--img_size', type=int, default=512, help='輸入圖片大小')
 parser.add_argument('--kernel_size', type=int, default=5, help='形態學核大小')
 parser.add_argument('--threshold', type=int, default=128, help='二值化閾值')
-parser.add_argument('--output_video_name', type=str, default='result_morph.mp4', help='輸出影片名稱')
+parser.add_argument('--output_video_name', type=str, default='test.mp4', help='輸出影片名稱')
 args = parser.parse_args()
 
 os.makedirs(args.output_dir, exist_ok=True)

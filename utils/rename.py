@@ -23,12 +23,11 @@ def rename_images_recursive(root_dir):
 
                     try:
                         os.rename(old_path, new_path)
-                        print(f"✅ {old_path} → {new_name}")
+                        print(f"{old_path} → {new_name}")
                     except Exception as e:
-                        print(f"❌ 無法重新命名 {old_path}: {e}")
+                        print(f"無法重新命名 {old_path}: {e}")
 
 if __name__ == "__main__":
-    # ⚠️ 請改成你要處理的最上層資料夾路徑
     root_dir = r"D:/Users/peggy/Dataset/texture/target/targett"
     rename_images_recursive(root_dir)
-    print("🎉 所有圖片重新命名完成！")
+    print("所有圖片重新命名完成")

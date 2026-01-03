@@ -3,7 +3,6 @@ import glob
 import torch
 import numpy as np
 import cv2
-from skimage.metrics import structural_similarity as ssim
 from models.models_v3 import UNetGenerator
 import argparse
 from math import log10
@@ -36,22 +35,37 @@ def safe_psnr(img1, img2, data_range=255.0):
         return 100.0  # 當 MSE 幾乎為 0 時，回傳極高值而非無限大
     return 10 * log10((data_range ** 2) / mse)
 
+# ------------------
+# OpenCV版 SSIM 計算
+# ------------------
+
+def ssim(img1, img2):
+    C1 = (0.01 * 255) ** 2
+    C2 = (0.03 * 255) ** 2
+
+    img1 = img1.astype(np.float64)
+    img2 = img2.astype(np.float64)
+
+    mu1 = cv2.GaussianBlur(img1, (11, 11), 1.5)
+    mu2 = cv2.GaussianBlur(img2, (11, 11), 1.5)
+    mu1_sq = mu1 ** 2
+    mu2_sq = mu2 ** 2
+    mu1_mu2 = mu1 * mu2
+
+    sigma1_sq = cv2.GaussianBlur(img1 ** 2, (11, 11), 1.5) - mu1_sq
+    sigma2_sq = cv2.GaussianBlur(img2 ** 2, (11, 11), 1.5) - mu2_sq
+    sigma12 = cv2.GaussianBlur(img1 * img2, (11, 11), 1.5) - mu1_mu2
+
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
+               ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+    
+    return ssim_map.mean()
+
 # -----------------------
-# 形態學補全函式 (白底黑瑕疵 + 可調整去雜點大小)
+# 形態學補全函式
 # -----------------------
-def morphology_fill(
-    img, 
-    kernel_size=5, 
-    threshold=128, 
-    min_area_px=None,          # 小於此像素數的瑕疵直接去掉
-    max_isolated_area=300,     # 小於此面積才考慮孤立刪除
-    max_isolated_dist=100,     # 孤立距離判斷
-    debug=False
-):
-    """
-    對「白底黑瑕疵」影像進行形態學補全：
-    - 可以去除孤立小瑕疵
-    """
+def morphology_fill(img, kernel_size=5, threshold=128, min_area_px=None, max_isolated_area=300, max_isolated_dist=100, debug=False):
+    # 小於min_area_px像素數的瑕疵直接去掉、小於max_isolated_area才考慮孤立刪除、 max_isolated_dist孤立距離判斷
     if img.ndim == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -68,14 +82,14 @@ def morphology_fill(
     h, w = img.shape[:2]
     cleaned = np.zeros_like(opened)
 
-    # step1: 移除小於 min_area_px 的瑕疵
+    # 移除小於 min_area_px 的瑕疵
     for i in range(1, num_labels):
         area = stats[i, cv2.CC_STAT_AREA]
         if min_area_px is not None and area < min_area_px:
             continue
         cleaned[labels == i] = 255
 
-    # step2: 移除孤立瑕疵 (面積小於 max_isolated_area 且與其他瑕疵距離大於 max_isolated_dist)
+    # 移除孤立瑕疵 (面積小於 max_isolated_area 且與其他瑕疵距離大於 max_isolated_dist)
     centroids_list = [tuple(centroids[i]) for i in range(1, num_labels)]
     for i in range(1, num_labels):
         area = stats[i, cv2.CC_STAT_AREA]
@@ -159,7 +173,7 @@ num_tests = len(args.test_dirs)
 if num_weights > num_tests:
     print(f"！權重數量 ({num_weights}) > 測試資料夾數量 ({num_tests})，將循環使用 test_dirs。")
 elif num_weights < num_tests:
-    print(f"⚠️ 測試資料夾 ({num_tests}) 多於權重 ({num_weights})，多出的資料夾將被忽略。")
+    print(f"！測試資料夾 ({num_tests}) 多於權重 ({num_weights})，多出的資料夾將被忽略。")
 
 test_dirs_expanded = [args.test_dirs[i % num_tests] for i in range(num_weights)]
 
@@ -235,7 +249,7 @@ for idx, (weight_path, test_dir) in enumerate(zip(weights_files, test_dirs_expan
 
 
             # --- 評估 ---
-            ssim_val = ssim(target_np, fake_np_fill, data_range=255)
+            ssim_val = ssim(target_np, fake_np_fill)
             psnr_val = safe_psnr(target_np, fake_np_fill, data_range=255)
             ssim_list.append(ssim_val)
             psnr_list.append(psnr_val)
@@ -261,7 +275,6 @@ for idx, (weight_path, test_dir) in enumerate(zip(weights_files, test_dirs_expan
     if ssim_list:
         print(f"\n模型 {model_name} 平均指標：")
         print(f"SSIM={np.mean(ssim_list):.4f} | PSNR={np.mean(psnr_list):.2f}")
-        print(f"原始 Fake → Acc={np.mean(acc_raw):.4f}, Prec={np.mean(prec_raw):.4f}, Rec={np.mean(rec_raw):.4f}")
-        print(f"補全 Fake → Acc={np.mean(acc_fill):.4f}, Prec={np.mean(prec_fill):.4f}, Rec={np.mean(rec_fill):.4f}")
+        print(f"Fake → Acc={np.mean(acc_fill):.4f}, Prec={np.mean(prec_fill):.4f}, Rec={np.mean(rec_fill):.4f}")
     else:
         print(f"！模型 {model_name} 無有效結果。")

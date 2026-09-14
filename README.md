@@ -1,15 +1,13 @@
-<div align="center">
-    <span style="font-size:60px; font-weight:bold; color:black;">Texture</span>
-</div>
+# Texture瑕疵檢測
 
 ---
 
 **[DEMO影片](https://drive.google.com/file/d/1FIBpg0cUHm_EhO5W6WpPrasOudYZqgrj/view?usp=sharing)**
 
 
-組員(依學號排列)
-[資工3B 412411281 劉奕霈](https://github.com/rainyyy-yyy)
-[資工3B 413417378 梁芷綾](https://github.com/ichbinjess-git)
+組員
+[rainyyy-yyy](https://github.com/rainyyy-yyy)、
+[ichbinjess-git](https://github.com/ichbinjess-git)
 
 
 # 環境配置
